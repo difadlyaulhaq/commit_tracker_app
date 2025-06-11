@@ -154,6 +154,8 @@ class AuthBloc extends Bloc<AuthEvent, AuthState> {
       // Update GitHub credentials jika diberikan
       if (event.githubUsername.isNotEmpty || event.githubToken.isNotEmpty) {
         final updatedUserModel = UserModel(
+          createdAt: userModel.createdAt,
+          lastLoginAt: DateTime.now(), // Update last login time
           uid: userModel.uid,
           email: userModel.email,
           githubUsername: event.githubUsername.isNotEmpty ? event.githubUsername : userModel.githubUsername,
@@ -237,6 +239,8 @@ class AuthBloc extends Bloc<AuthEvent, AuthState> {
       // Buat user model
       final userModel = UserModel(
         uid: uid,
+        createdAt: DateTime.now(),
+        lastLoginAt: DateTime.now(), 
         email: email,
         githubUsername: event.githubUsername,
         githubToken: event.githubToken,
