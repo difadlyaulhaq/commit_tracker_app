@@ -10,6 +10,23 @@ abstract class AuthEvent extends Equatable {
   List<Object> get props => [];
 }
 
+class RegisterRequested extends AuthEvent {
+  final String email;
+  final String password;
+  final String githubUsername;
+  final String githubToken;
+
+  RegisterRequested({
+    required this.email,
+    required this.password,
+    required this.githubUsername,
+    required this.githubToken,
+  });
+
+  @override
+  List<Object> get props => [email, password, githubUsername, githubToken];
+}
+
 class CheckAuthStatus extends AuthEvent {}
 
 class LoginRequested extends AuthEvent {
@@ -69,6 +86,7 @@ class AuthBloc extends Bloc<AuthEvent, AuthState> {
   AuthBloc() : super(AuthInitial()) {
     on<CheckAuthStatus>(_onCheckAuthStatus);
     on<LoginRequested>(_onLoginRequested);
+    on<RegisterRequested>(_onRegisterRequested); // Added missing handler
     on<LogoutRequested>(_onLogoutRequested);
   }
 
@@ -94,12 +112,74 @@ class AuthBloc extends Bloc<AuthEvent, AuthState> {
   void _onLoginRequested(LoginRequested event, Emitter<AuthState> emit) async {
     emit(AuthLoading());
     try {
+      // First, try to sign in with email and password only
       final credential = await _firebaseAuth.signInWithEmailAndPassword(
         email: event.email,
         password: event.password,
       );
 
       if (credential.user != null) {
+        // Get existing user data from Firestore
+        final doc = await _firestore.collection('users').doc(credential.user!.uid).get();
+        
+        if (doc.exists) {
+          // User exists, use existing data
+          final userModel = UserModel.fromMap(doc.data()!);
+          emit(AuthAuthenticated(userModel));
+        } else {
+          // User doesn't exist in Firestore, create new record
+          final userModel = UserModel(
+            uid: credential.user!.uid,
+            email: event.email,
+            githubUsername: event.githubUsername,
+            githubToken: event.githubToken,
+          );
+          
+          await _firestore.collection('users').doc(credential.user!.uid).set(userModel.toMap());
+          emit(AuthAuthenticated(userModel));
+        }
+      }
+    } on FirebaseAuthException catch (e) {
+      String errorMessage;
+      switch (e.code) {
+        case 'user-not-found':
+          errorMessage = 'No user found with this email address.';
+          break;
+        case 'wrong-password':
+          errorMessage = 'Incorrect password.';
+          break;
+        case 'invalid-email':
+          errorMessage = 'Invalid email address.';
+          break;
+        case 'user-disabled':
+          errorMessage = 'This user account has been disabled.';
+          break;
+        case 'too-many-requests':
+          errorMessage = 'Too many failed login attempts. Please try again later.';
+          break;
+        case 'invalid-credential':
+          errorMessage = 'The credentials provided are invalid, expired, or malformed.';
+          break;
+        default:
+          errorMessage = 'Login failed: ${e.message}';
+      }
+      emit(AuthError(errorMessage));
+    } catch (e) {
+      emit(AuthError('Login failed: ${e.toString()}'));
+    }
+  }
+
+  void _onRegisterRequested(RegisterRequested event, Emitter<AuthState> emit) async {
+    emit(AuthLoading());
+    try {
+      // Create new user with email and password
+      final credential = await _firebaseAuth.createUserWithEmailAndPassword(
+        email: event.email,
+        password: event.password,
+      );
+
+      if (credential.user != null) {
+        // Create user model and save to Firestore
         final userModel = UserModel(
           uid: credential.user!.uid,
           email: event.email,
@@ -110,28 +190,27 @@ class AuthBloc extends Bloc<AuthEvent, AuthState> {
         await _firestore.collection('users').doc(credential.user!.uid).set(userModel.toMap());
         emit(AuthAuthenticated(userModel));
       }
-    } catch (e) {
-      // Try to create account if login fails
-      try {
-        final credential = await _firebaseAuth.createUserWithEmailAndPassword(
-          email: event.email,
-          password: event.password,
-        );
-
-        if (credential.user != null) {
-          final userModel = UserModel(
-            uid: credential.user!.uid,
-            email: event.email,
-            githubUsername: event.githubUsername,
-            githubToken: event.githubToken,
-          );
-
-          await _firestore.collection('users').doc(credential.user!.uid).set(userModel.toMap());
-          emit(AuthAuthenticated(userModel));
-        }
-      } catch (createError) {
-        emit(AuthError('Login failed: ${createError.toString()}'));
+    } on FirebaseAuthException catch (e) {
+      String errorMessage;
+      switch (e.code) {
+        case 'weak-password':
+          errorMessage = 'The password provided is too weak.';
+          break;
+        case 'email-already-in-use':
+          errorMessage = 'An account already exists with this email address.';
+          break;
+        case 'invalid-email':
+          errorMessage = 'Invalid email address.';
+          break;
+        case 'operation-not-allowed':
+          errorMessage = 'Email/password accounts are not enabled.';
+          break;
+        default:
+          errorMessage = 'Registration failed: ${e.message}';
       }
+      emit(AuthError(errorMessage));
+    } catch (e) {
+      emit(AuthError('Registration failed: ${e.toString()}'));
     }
   }
 
