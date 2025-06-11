@@ -18,6 +18,7 @@ class _LoginScreenState extends State<LoginScreen> {
   Widget build(BuildContext context) {
     return Scaffold(
       backgroundColor: Color(0xFF0D1117),
+      resizeToAvoidBottomInset: true, // Allow resizing when keyboard appears
       body: BlocListener<AuthBloc, AuthState>(
         listener: (context, state) {
           if (state is AuthError) {
@@ -27,13 +28,14 @@ class _LoginScreenState extends State<LoginScreen> {
           }
         },
         child: SafeArea(
-          child: Padding(
+          child: SingleChildScrollView(
             padding: EdgeInsets.all(24.0),
             child: Form(
               key: _formKey,
               child: Column(
                 mainAxisAlignment: MainAxisAlignment.center,
                 children: [
+                  SizedBox(height: MediaQuery.of(context).size.height * 0.1),
                   Icon(
                     Icons.local_fire_department,
                     size: 80,
@@ -129,6 +131,7 @@ class _LoginScreenState extends State<LoginScreen> {
                       fontSize: 12,
                     ),
                   ),
+                  SizedBox(height: MediaQuery.of(context).viewInsets.bottom),
                 ],
               ),
             ),
