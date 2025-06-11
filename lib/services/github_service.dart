@@ -10,8 +10,8 @@ class GitHubService {
     try {
       print('Fetching commits for user: $username');
       
-      // Gunakan GraphQL API untuk data yang lebih akurat
-      final contributionsData = await _getContributionsData(username, token);
+      // Gunakan GraphQL API untuk mendapatkan semua data contributions
+      final contributionsData = await _getAllContributionsData(username, token);
       
       if (contributionsData['data'] != null && 
           contributionsData['data']['user'] != null) {
@@ -46,12 +46,69 @@ class GitHubService {
     return commits;
   }
 
-  // Metode menggunakan GraphQL untuk mendapatkan data contributions yang akurat
-  Future<Map<String, dynamic>> _getContributionsData(String username, String token) async {
-    // Hitung tanggal dari setahun yang lalu sampai hari ini
+  // Metode untuk mendapatkan semua contributions dari berbagai tahun
+  Future<Map<String, dynamic>> _getAllContributionsData(String username, String token) async {
     final now = DateTime.now();
-    final oneYearAgo = DateTime(now.year - 1, now.month, now.day);
+    final allContributions = <String, dynamic>{
+      'data': {
+        'user': {
+          'contributionsCollection': {
+            'totalCommitContributions': 0,
+            'contributionCalendar': {
+              'totalContributions': 0,
+              'weeks': <dynamic>[]
+            }
+          }
+        }
+      }
+    };
+
+    // Fetch contributions untuk setiap tahun dari 2020 sampai sekarang
+    final startYear = 2020; // Mulai dari tahun 2020
+    final currentYear = now.year;
     
+    int totalCommitContributions = 0;
+    final List<dynamic> allWeeks = [];
+
+    for (int year = startYear; year <= currentYear; year++) {
+      try {
+        final yearStart = DateTime(year, 1, 1);
+        final yearEnd = year == currentYear ? now : DateTime(year, 12, 31, 23, 59, 59);
+        
+        print('Fetching contributions for year: $year');
+        
+        final yearContributions = await _getContributionsForYear(username, token, yearStart, yearEnd);
+        
+        if (yearContributions['data'] != null && 
+            yearContributions['data']['user'] != null) {
+          final yearCollection = yearContributions['data']['user']['contributionsCollection'];
+          
+          totalCommitContributions += (yearCollection['totalCommitContributions'] ?? 0) as int;
+          
+          final yearWeeks = yearCollection['contributionCalendar']['weeks'] as List;
+          allWeeks.addAll(yearWeeks);
+        }
+        
+        // Tambahkan delay kecil untuk menghindari rate limiting
+        await Future.delayed(Duration(milliseconds: 100));
+        
+      } catch (e) {
+        print('Error fetching contributions for year $year: $e');
+        continue;
+      }
+    }
+
+    // Update total contributions
+    allContributions['data']['user']['contributionsCollection']['totalCommitContributions'] = totalCommitContributions;
+    allContributions['data']['user']['contributionsCollection']['contributionCalendar']['weeks'] = allWeeks;
+    allContributions['data']['user']['contributionsCollection']['contributionCalendar']['totalContributions'] = totalCommitContributions;
+
+    print('Total contributions across all years: $totalCommitContributions');
+    return allContributions;
+  }
+
+  // Metode untuk mendapatkan contributions untuk tahun tertentu
+  Future<Map<String, dynamic>> _getContributionsForYear(String username, String token, DateTime from, DateTime to) async {
     final String query = '''
     query(\$username: String!, \$from: DateTime!, \$to: DateTime!) {
       user(login: \$username) {
@@ -82,32 +139,29 @@ class GitHubService {
         'query': query,
         'variables': {
           'username': username,
-          'from': oneYearAgo.toIso8601String(),
-          'to': now.toIso8601String(),
+          'from': from.toIso8601String(),
+          'to': to.toIso8601String(),
         },
       }),
     );
 
-    print('GraphQL Response Status: ${response.statusCode}');
-    
     if (response.statusCode == 200) {
       final data = json.decode(response.body);
-      print('GraphQL Response: $data');
       return data;
     } else {
-      print('GraphQL Error: ${response.body}');
+      print('GraphQL Error for year ${from.year}: ${response.body}');
       throw Exception('Failed to fetch contributions data: ${response.statusCode}');
     }
   }
 
-  // Metode untuk mendapatkan semua repository dengan paginasi
+  // Metode fallback untuk mendapatkan semua repository dengan paginasi (improved)
   Future<void> _getAllRepositoriesCommits(String username, String token, List<DateTime> commits) async {
     print('Using fallback REST API method');
     int page = 1;
     bool hasMore = true;
     
-    // Batasi jumlah halaman untuk menghindari infinite loop
-    int maxPages = 10;
+    // Tingkatkan limit halaman untuk mendapatkan lebih banyak data
+    int maxPages = 20;
 
     while (hasMore && page <= maxPages) {
       try {
@@ -148,29 +202,22 @@ class GitHubService {
     }
   }
 
-  // Metode untuk mendapatkan commit dari repository tertentu
+  // Metode untuk mendapatkan commit dari repository tertentu (improved)
   Future<void> _getRepositoryCommits(Map<String, dynamic> repo, String username, String token, List<DateTime> commits) async {
     final repoName = repo['name'];
     final ownerLogin = repo['owner']['login'];
     
-    // Skip repo yang terlalu lama tidak diupdate (lebih dari 2 tahun)
-    final updatedAt = DateTime.parse(repo['updated_at']);
-    final twoYearsAgo = DateTime.now().subtract(Duration(days: 730));
-    if (updatedAt.isBefore(twoYearsAgo)) {
-      return;
-    }
+    // Jangan skip repo lama, karena kita ingin semua commits
     
     int page = 1;
     bool hasMore = true;
-    int maxPages = 5; // Batasi per repo
+    int maxPages = 10; // Batasi per repo
 
     while (hasMore && page <= maxPages) {
       try {
-        // Hanya ambil commit dari tahun ini untuk performa
-        final since = DateTime.now().subtract(Duration(days: 365)).toIso8601String();
-        
+        // Hapus filter 'since' untuk mendapatkan semua commits
         final commitsResponse = await http.get(
-          Uri.parse('$baseUrl/repos/$ownerLogin/$repoName/commits?author=$username&per_page=100&page=$page&since=$since'),
+          Uri.parse('$baseUrl/repos/$ownerLogin/$repoName/commits?author=$username&per_page=100&page=$page'),
           headers: {
             'Authorization': 'token $token',
             'Accept': 'application/vnd.github.v3+json',
@@ -215,7 +262,7 @@ class GitHubService {
       final todayEnd = todayStart.add(Duration(days: 1));
 
       // Gunakan GraphQL untuk mendapatkan data hari ini
-      final contributionsData = await _getContributionsData(username, token);
+      final contributionsData = await _getContributionsForYear(username, token, todayStart, todayEnd);
       
       if (contributionsData['data'] != null && 
           contributionsData['data']['user'] != null) {
@@ -245,13 +292,13 @@ class GitHubService {
     }
   }
 
-  // Metode untuk mendapatkan total commit sepanjang masa
+  // Metode untuk mendapatkan total commit sepanjang masa (improved)
   Future<int> getTotalCommitCount(String username, String token) async {
     try {
       print('Getting total commit count for: $username');
       
-      // Gunakan GraphQL untuk mendapatkan total contributions
-      final contributionsData = await _getContributionsData(username, token);
+      // Gunakan GraphQL untuk mendapatkan total contributions dari semua tahun
+      final contributionsData = await _getAllContributionsData(username, token);
       
       if (contributionsData['data'] != null && 
           contributionsData['data']['user'] != null) {
@@ -262,9 +309,9 @@ class GitHubService {
         return totalCommitContributions as int;
       }
       
-      // Fallback ke search API
+      // Fallback ke search API dengan query yang lebih spesifik
       final searchResponse = await http.get(
-        Uri.parse('$baseUrl/search/commits?q=author:$username'),
+        Uri.parse('$baseUrl/search/commits?q=author:$username+type:commit'),
         headers: {
           'Authorization': 'token $token',
           'Accept': 'application/vnd.github.cloak-preview',
@@ -288,7 +335,7 @@ class GitHubService {
     }
   }
 
-  // Metode untuk mendapatkan current streak
+  // Metode untuk mendapatkan current streak (improved)
   int calculateCurrentStreak(List<DateTime> commits) {
     if (commits.isEmpty) return 0;
 
@@ -300,6 +347,8 @@ class GitHubService {
       final dateKey = '${commit.year}-${commit.month.toString().padLeft(2, '0')}-${commit.day.toString().padLeft(2, '0')}';
       commitsByDate[dateKey] = (commitsByDate[dateKey] ?? 0) + 1;
     }
+
+    print('Commits grouped by date: ${commitsByDate.length} unique days');
 
     final today = DateTime.now();
     final todayKey = '${today.year}-${today.month.toString().padLeft(2, '0')}-${today.day.toString().padLeft(2, '0')}';
@@ -323,8 +372,8 @@ class GitHubService {
         break;
       }
       
-      // Batasi perhitungan maksimal 1000 hari untuk performa
-      if (streak >= 1000) break;
+      // Tingkatkan limit untuk streak yang lebih panjang
+      if (streak >= 2000) break;
     }
 
     print('Calculated streak: $streak');
@@ -348,5 +397,37 @@ class GitHubService {
       print('Connection test failed: $e');
       return false;
     }
+  }
+
+  // Method tambahan untuk mendapatkan statistik contributions per tahun
+  Future<Map<int, int>> getContributionsByYear(String username, String token) async {
+    final contributionsByYear = <int, int>{};
+    
+    try {
+      final now = DateTime.now();
+      final startYear = 2020;
+      final currentYear = now.year;
+      
+      for (int year = startYear; year <= currentYear; year++) {
+        final yearStart = DateTime(year, 1, 1);
+        final yearEnd = year == currentYear ? now : DateTime(year, 12, 31, 23, 59, 59);
+        
+        final yearContributions = await _getContributionsForYear(username, token, yearStart, yearEnd);
+        
+        if (yearContributions['data'] != null && 
+            yearContributions['data']['user'] != null) {
+          final totalContributions = yearContributions['data']['user']
+              ['contributionsCollection']['totalCommitContributions'] as int;
+          
+          contributionsByYear[year] = totalContributions;
+        }
+        
+        await Future.delayed(Duration(milliseconds: 100));
+      }
+    } catch (e) {
+      print('Error getting contributions by year: $e');
+    }
+    
+    return contributionsByYear;
   }
 }
