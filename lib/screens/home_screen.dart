@@ -1,3 +1,4 @@
+import 'package:commit_tracker/widgets/AnimatedFlameWidget.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_bloc/flutter_bloc.dart';
 import '../blocs/auth_bloc.dart';
@@ -32,7 +33,8 @@ class HomeScreen extends StatelessWidget {
                           } else if (streakState is StreakLoaded) {
                             return Column(
                               children: [
-                                FlameWidget(streak: streakState.streak),
+                                // FlameWidget(streak: streakState.streak),
+                                AnimatedFlameWidget(streak: streakState.streak),
                                 SizedBox(height: 30),
                                 StreakStats(streak: streakState.streak),
                                 SizedBox(height: 30),
