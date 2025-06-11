@@ -2,6 +2,8 @@ import 'package:flutter_bloc/flutter_bloc.dart';
 import 'package:equatable/equatable.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
+import 'package:crypto/crypto.dart';
+import 'dart:convert';
 import '../models/user_model.dart';
 
 // Auth Events
@@ -78,7 +80,7 @@ class AuthError extends AuthState {
   List<Object> get props => [message];
 }
 
-// Auth Bloc
+// Auth Bloc dengan Firestore-based Authentication
 class AuthBloc extends Bloc<AuthEvent, AuthState> {
   final FirebaseAuth _firebaseAuth = FirebaseAuth.instance;
   final FirebaseFirestore _firestore = FirebaseFirestore.instance;
@@ -86,8 +88,15 @@ class AuthBloc extends Bloc<AuthEvent, AuthState> {
   AuthBloc() : super(AuthInitial()) {
     on<CheckAuthStatus>(_onCheckAuthStatus);
     on<LoginRequested>(_onLoginRequested);
-    on<RegisterRequested>(_onRegisterRequested); // Added missing handler
+    on<RegisterRequested>(_onRegisterRequested);
     on<LogoutRequested>(_onLogoutRequested);
+  }
+
+  // Hash password untuk keamanan
+  String _hashPassword(String password) {
+    var bytes = utf8.encode(password);
+    var digest = sha256.convert(bytes);
+    return digest.toString();
   }
 
   void _onCheckAuthStatus(CheckAuthStatus event, Emitter<AuthState> emit) async {
@@ -99,9 +108,12 @@ class AuthBloc extends Bloc<AuthEvent, AuthState> {
           final userModel = UserModel.fromMap(doc.data()!);
           emit(AuthAuthenticated(userModel));
         } else {
+          // User ada di Firebase Auth tapi tidak ada di Firestore, logout
+          await _firebaseAuth.signOut();
           emit(AuthUnauthenticated());
         }
       } catch (e) {
+        await _firebaseAuth.signOut();
         emit(AuthUnauthenticated());
       }
     } else {
@@ -112,110 +124,144 @@ class AuthBloc extends Bloc<AuthEvent, AuthState> {
   void _onLoginRequested(LoginRequested event, Emitter<AuthState> emit) async {
     emit(AuthLoading());
     try {
-      // First, try to sign in with email and password only
-      final credential = await _firebaseAuth.signInWithEmailAndPassword(
-        email: event.email,
-        password: event.password,
-      );
+      final email = event.email.trim().toLowerCase();
+      final hashedPassword = _hashPassword(event.password);
 
-      if (credential.user != null) {
-        // Get existing user data from Firestore
-        final doc = await _firestore.collection('users').doc(credential.user!.uid).get();
+      // Cari user di Firestore berdasarkan email dan password
+      final querySnapshot = await _firestore
+          .collection('users')
+          .where('email', isEqualTo: email)
+          .limit(1)
+          .get();
+
+      if (querySnapshot.docs.isEmpty) {
+        emit(AuthError('Email tidak ditemukan. Silakan daftar terlebih dahulu.'));
+        return;
+      }
+
+      final userDoc = querySnapshot.docs.first;
+      final userData = userDoc.data();
+      
+      // Verifikasi password
+      if (userData['hashedPassword'] != hashedPassword) {
+        emit(AuthError('Password salah. Silakan coba lagi.'));
+        return;
+      }
+
+      // Buat UserModel dari data Firestore
+      final userModel = UserModel.fromMap(userData);
+
+      // Update GitHub credentials jika diberikan
+      if (event.githubUsername.isNotEmpty || event.githubToken.isNotEmpty) {
+        final updatedUserModel = UserModel(
+          uid: userModel.uid,
+          email: userModel.email,
+          githubUsername: event.githubUsername.isNotEmpty ? event.githubUsername : userModel.githubUsername,
+          githubToken: event.githubToken.isNotEmpty ? event.githubToken : userModel.githubToken,
+        );
         
-        if (doc.exists) {
-          // User exists, use existing data
-          final userModel = UserModel.fromMap(doc.data()!);
-          emit(AuthAuthenticated(userModel));
-        } else {
-          // User doesn't exist in Firestore, create new record
-          final userModel = UserModel(
-            uid: credential.user!.uid,
-            email: event.email,
-            githubUsername: event.githubUsername,
-            githubToken: event.githubToken,
-          );
-          
-          await _firestore.collection('users').doc(credential.user!.uid).set(userModel.toMap());
-          emit(AuthAuthenticated(userModel));
-        }
+        // Update di Firestore
+        await _firestore.collection('users').doc(userModel.uid).update({
+          'githubUsername': updatedUserModel.githubUsername,
+          'githubToken': updatedUserModel.githubToken,
+        });
+        
+        emit(AuthAuthenticated(updatedUserModel));
+      } else {
+        emit(AuthAuthenticated(userModel));
       }
-    } on FirebaseAuthException catch (e) {
-      String errorMessage;
-      switch (e.code) {
-        case 'user-not-found':
-          errorMessage = 'No user found with this email address.';
-          break;
-        case 'wrong-password':
-          errorMessage = 'Incorrect password.';
-          break;
-        case 'invalid-email':
-          errorMessage = 'Invalid email address.';
-          break;
-        case 'user-disabled':
-          errorMessage = 'This user account has been disabled.';
-          break;
-        case 'too-many-requests':
-          errorMessage = 'Too many failed login attempts. Please try again later.';
-          break;
-        case 'invalid-credential':
-          errorMessage = 'The credentials provided are invalid, expired, or malformed.';
-          break;
-        default:
-          errorMessage = 'Login failed: ${e.message}';
+
+      // Sign in ke Firebase Auth secara silent (untuk konsistensi)
+      try {
+        // Coba sign in dengan Firebase Auth, tapi jangan gagalkan jika error
+        await _firebaseAuth.signInWithEmailAndPassword(
+          email: email,
+          password: event.password,
+        );
+      } catch (e) {
+        // Jika Firebase Auth gagal, tetap lanjutkan karena sudah verify dengan Firestore
+        print('Firebase Auth sign in failed, but Firestore auth succeeded: $e');
       }
-      emit(AuthError(errorMessage));
+
     } catch (e) {
-      emit(AuthError('Login failed: ${e.toString()}'));
+      emit(AuthError('Login gagal: ${e.toString()}'));
     }
   }
 
   void _onRegisterRequested(RegisterRequested event, Emitter<AuthState> emit) async {
     emit(AuthLoading());
     try {
-      // Create new user with email and password
-      final credential = await _firebaseAuth.createUserWithEmailAndPassword(
-        email: event.email,
-        password: event.password,
+      final email = event.email.trim().toLowerCase();
+      final hashedPassword = _hashPassword(event.password);
+
+      // Cek apakah email sudah terdaftar di Firestore
+      final existingUser = await _firestore
+          .collection('users')
+          .where('email', isEqualTo: email)
+          .limit(1)
+          .get();
+
+      if (existingUser.docs.isNotEmpty) {
+        emit(AuthError('Email sudah terdaftar. Silakan gunakan email lain atau login.'));
+        return;
+      }
+
+      // Cek apakah GitHub username sudah digunakan
+      if (event.githubUsername.isNotEmpty) {
+        final existingGithubUser = await _firestore
+            .collection('users')
+            .where('githubUsername', isEqualTo: event.githubUsername)
+            .limit(1)
+            .get();
+
+        if (existingGithubUser.docs.isNotEmpty) {
+          emit(AuthError('GitHub username sudah digunakan. Silakan gunakan username lain.'));
+          return;
+        }
+      }
+
+      // Generate UID untuk user baru
+      String uid;
+      try {
+        // Coba daftar ke Firebase Auth dulu
+        final credential = await _firebaseAuth.createUserWithEmailAndPassword(
+          email: email,
+          password: event.password,
+        );
+        uid = credential.user!.uid;
+      } catch (e) {
+        // Jika Firebase Auth gagal, generate UID sendiri
+        uid = _firestore.collection('users').doc().id;
+      }
+
+      // Buat user model
+      final userModel = UserModel(
+        uid: uid,
+        email: email,
+        githubUsername: event.githubUsername,
+        githubToken: event.githubToken,
       );
 
-      if (credential.user != null) {
-        // Create user model and save to Firestore
-        final userModel = UserModel(
-          uid: credential.user!.uid,
-          email: event.email,
-          githubUsername: event.githubUsername,
-          githubToken: event.githubToken,
-        );
+      // Simpan ke Firestore dengan password hash
+      await _firestore.collection('users').doc(uid).set({
+        ...userModel.toMap(),
+        'hashedPassword': hashedPassword,
+        'createdAt': FieldValue.serverTimestamp(),
+      });
 
-        await _firestore.collection('users').doc(credential.user!.uid).set(userModel.toMap());
-        emit(AuthAuthenticated(userModel));
-      }
-    } on FirebaseAuthException catch (e) {
-      String errorMessage;
-      switch (e.code) {
-        case 'weak-password':
-          errorMessage = 'The password provided is too weak.';
-          break;
-        case 'email-already-in-use':
-          errorMessage = 'An account already exists with this email address.';
-          break;
-        case 'invalid-email':
-          errorMessage = 'Invalid email address.';
-          break;
-        case 'operation-not-allowed':
-          errorMessage = 'Email/password accounts are not enabled.';
-          break;
-        default:
-          errorMessage = 'Registration failed: ${e.message}';
-      }
-      emit(AuthError(errorMessage));
+      emit(AuthAuthenticated(userModel));
+
     } catch (e) {
-      emit(AuthError('Registration failed: ${e.toString()}'));
+      emit(AuthError('Registrasi gagal: ${e.toString()}'));
     }
   }
 
   void _onLogoutRequested(LogoutRequested event, Emitter<AuthState> emit) async {
-    await _firebaseAuth.signOut();
+    try {
+      await _firebaseAuth.signOut();
+    } catch (e) {
+      // Ignore Firebase Auth errors during logout
+    }
     emit(AuthUnauthenticated());
   }
 }
