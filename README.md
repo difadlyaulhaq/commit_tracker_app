@@ -1,55 +1,56 @@
-📌 Commit Tracker App
-Commit Tracker App is a mobile application built with Flutter, designed to help developers stay consistent with their GitHub commit streaks. With personalized streak tracking, notifications, and visual progress indicators, it's your accountability partner for daily coding.
 
-🚀 Features
-🔥 Daily GitHub commit streak tracking
+# 📌 Commit Tracker App
 
-⏰ Smart reminders when you haven’t committed yet
+**Commit Tracker App** is a mobile application built with **Flutter**, designed to help developers stay consistent with their GitHub commit streaks. With personalized streak tracking, notifications, and visual progress indicators, it's your accountability partner for daily coding.
 
-📊 Visual indicators: flame colors change based on streak milestones (e.g., 200, 500, 1000 days)
+## 🚀 Features
 
-🗂️ Dashboard showing total commits
+* 🔥 Daily GitHub commit streak tracking
+* ⏰ Smart reminders when you haven’t committed yet
+* 📊 Visual indicators: flame colors change based on streak milestones (e.g., 200, 500, 1000 days)
+* 🗂️ Dashboard showing total commits
+* 🔐 Secure login via **Firebase Authentication**
+* ☁️ Real-time storage using **Cloud Firestore**
 
-🔐 Secure login via Firebase Authentication
+## 🧰 Tech Stack
 
-☁️ Real-time storage using Cloud Firestore
+* **Flutter** – Cross-platform mobile development
+* **Firebase** – Auth & Firestore for backend
+* **GitHub API** – Uses **Personal Access Token (PAT)** to retrieve commit data securely
 
-🧰 Tech Stack
-Flutter – Cross-platform mobile development
+## 📸 Screenshots
 
-Firebase – Auth & Firestore for backend
+> *Coming soon*
 
-GitHub API – Uses Personal Access Token (PAT) to retrieve commit data securely
+## ⚙️ Getting Started
 
-📸 Screenshots
-Coming soon
+1. **Clone the repository**
 
-⚙️ Getting Started
-Clone the repository
+   ```bash
+   git clone https://github.com/difadlyaulhaq/commit_tracker_app.git
+   ```
 
-bash
-Copy
-Edit
-git clone https://github.com/difadlyaulhaq/commit_tracker_app.git
-Install dependencies
+2. **Install dependencies**
 
-bash
-Copy
-Edit
-flutter pub get
-Set up Firebase
+   ```bash
+   flutter pub get
+   ```
 
-Add your google-services.json and GoogleService-Info.plist files
+3. **Set up Firebase**
 
-Enable Email/Password or Google Auth in Firebase
+   * Add your `google-services.json` and `GoogleService-Info.plist` files
+   * Enable Email/Password or Google Auth in Firebase
 
-Add GitHub PAT (Personal Access Token)
+4. **Add GitHub PAT (Personal Access Token)**
 
-Store securely in your app or Firestore (never hard-code in public)
+   * Store securely in your app or Firestore (never hard-code in public)
 
-Run the app
+5. **Run the app**
 
-bash
-Copy
-Edit
-flutter run
+   ```bash
+   flutter run
+   ```
+
+## 📄 License
+
+MIT License – free to use and modify.
